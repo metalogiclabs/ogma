@@ -60,4 +60,19 @@ grep -q 'sensor_ok' "$evidence_dir/strict-two-unmapped/stderr.log"
 grep -q 'link_ok' "$evidence_dir/strict-two-unmapped/stderr.log"
 test ! -e "$evidence_dir/strict-two-unmapped/generated/Copilot.hs"
 
+# Check that --require-types is propagated through the --project code path.
+project_case="$evidence_dir/strict-project-unmapped"
+mkdir -p "$project_case"
+set +e
+"$ogma_bin" standalone \
+  --project ogma-core/tests/project-untyped-standalone.ogma \
+  --target-dir "$project_case/generated" --require-types \
+  > "$project_case/stdout.log" 2> "$project_case/stderr.log"
+project_exit=$?
+set -e
+echo "$project_exit" > "$project_case/exit-code.txt"
+test "$project_exit" -ne 0
+grep -q 'sensor_ok' "$project_case/stderr.log"
+test ! -e "$project_case/generated/Copilot.hs"
+
 echo 'standalone unresolved-type smoke assertions passed'

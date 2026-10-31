@@ -133,11 +133,7 @@ command' options (ExprPair exprT) = do
           [] -> pure ()
           names
             | commandRequireTypes options ->
-                throwError $ ErrorTriplet 1
-                  ("Unresolved external type(s): " ++ intercalate ", " names
-                   ++ ". Define types in Other_variables before generating "
-                   ++ "a standalone Copilot monitor.")
-                  LocationNothing
+                throwError $ commandUnresolvedTypes names
             | otherwise ->
                 liftIO $ hPutStrLn stderr $
                   "warning: unresolved external type(s): "
@@ -299,6 +295,15 @@ commandIncorrectSpecE expr e =
     msg =
       "The input specification " ++ show expr ++ " cannot be formalized: " ++ e
 
+-- | Error: standalone external inputs have not all been given a type.
+commandUnresolvedTypes :: [String] -> ErrorTriplet
+commandUnresolvedTypes names =
+    ErrorTriplet ecUnresolvedTypes msg LocationNothing
+  where
+    msg = "Unresolved external type(s): " ++ intercalate ", " names
+       ++ ". Define types in Other_variables before generating "
+       ++ "a standalone Copilot monitor."
+
 -- ** Error codes
 
 -- | Error: there is no input argument.
@@ -312,3 +317,7 @@ ecMultipleInputTypes = 1
 -- | Error: the input specification cannot be formalized.
 ecIncorrectSpec :: ErrorCode
 ecIncorrectSpec = 1
+
+-- | Error: a strict standalone command contains untyped external signals.
+ecUnresolvedTypes :: ErrorCode
+ecUnresolvedTypes = 1
