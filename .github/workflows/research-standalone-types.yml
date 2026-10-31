@@ -1,0 +1,35 @@
+name: Research - standalone unresolved external types
+
+on:
+  push:
+    branches:
+      - research/standalone-untyped-diagnostics-20261101
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out research branch
+        uses: actions/checkout@v4
+
+      - name: Configure GHC/Cabal
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.2.8'
+          cabal-version: '3.14'
+          cabal-update: false
+
+      - name: Install native Ogma prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libbz2-dev libexpat1-dev z3 alex happy binutils binutils-gold
+          command -v ld.gold
+          cabal update
+
+      - name: Run all ogma-core HUnit tests
+        run: cabal test ogma-core:unit-tests --jobs=2 --test-show-details=direct
