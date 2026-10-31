@@ -9,7 +9,13 @@ evidence_dir=ogma-cli/tests/out/standalone-require-types
 mkdir -p "$evidence_dir"
 
 # CI builds the CLI first. Running the binary directly keeps Cabal/compiler
-# diagnostics out of the stderr assertions below.
+# diagnostics out of the stderr assertions below. A bare `cabal list-bin`
+# executable runs outside Cabal's packaged data-file environment, so point
+# Paths_ogma_core at the checked-out Ogma resources explicitly.
+ogma_data_dir="${OGMA_CORE_DATADIR:-$PWD/ogma-core}"
+test -r "$ogma_data_dir/data/formats/fcs_smv"
+test -d "$ogma_data_dir/templates/standalone"
+export ogma_core_datadir="$ogma_data_dir"
 ogma_bin="${OGMA_BIN:-$(cabal list-bin ogma-cli:exe:ogma)}"
 
 run_standalone() {
