@@ -1,0 +1,52 @@
+name: Research - R2U2 CySat-I source-to-monitor boundary
+
+on:
+  push:
+    branches:
+      - research/r2u2-cysat-source-monitor-20261117
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cy_sat_native_replay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out isolated research harness
+        uses: actions/checkout@v4
+        with:
+          path: lab
+          persist-credentials: false
+
+      - name: Check out immutable upstream R2U2 source
+        uses: actions/checkout@v4
+        with:
+          repository: R2U2/r2u2
+          ref: 2875a1dfc0b8cb27c4c4f14bece6b95c3afff91a
+          path: r2u2
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Qualify independent source comparator
+        run: python3 -m unittest discover -s lab/research -p test_r2u2_native_replay.py -v
+
+      - name: Build original R2U2 C99 monitor
+        run: make -C r2u2/monitors/c all
+
+      - name: Generate native monitor verdicts for controls and witnesses
+        run: python3 lab/research/r2u2_native_replay.py --repo r2u2 --out evidence/cysat
+
+      - name: Preserve source, binary, trace, and run receipts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r2u2-cysat-identity-replay-20261117
+          path: evidence/cysat/
+          if-no-files-found: warn
+          retention-days: 30
