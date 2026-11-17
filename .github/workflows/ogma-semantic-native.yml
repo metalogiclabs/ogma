@@ -1,0 +1,119 @@
+name: Ogma semantic translator boundary (research-only)
+
+on:
+  push:
+    branches:
+      - research/ogma-semantic-20261117
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ogma-translation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out private-fork research harness
+        uses: actions/checkout@v4
+        with:
+          path: research-fork
+
+      - name: Check out exact NASA Ogma source
+        uses: actions/checkout@v4
+        with:
+          repository: nasa/ogma
+          ref: 1f8355712aba76b4047ccb4b1f4cead1b6cdb42a
+          path: ogma-source
+
+      - name: Verify exact source and translator input contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C ogma-source rev-parse HEAD)" = 1f8355712aba76b4047ccb4b1f4cead1b6cdb42a
+          test "$(git -C ogma-source hash-object ogma-cli/examples/doorstop/REQ001.yml)" = 3d2622a8967bd264b9a878cbf208c63a000fb4be
+          chmod +x research-fork/research/ogma-semantic/translate.py
+          python3 - <<'PY'
+          import os, subprocess
+          p = "research-fork/research/ogma-semantic/translate.py"
+          source = "The temperature shall always be lower than or equal to 180 degrees"
+          for mode, output in (("faithful", "temperature <= 180"),
+                               ("strict", "temperature < 180")):
+              result = subprocess.run([p], input=source, text=True,
+                   capture_output=True, env={**os.environ, "OGMA_TRANSLATION_CASE": mode})
+              assert result.returncode == 0, result.stderr
+              assert result.stdout.strip() == output, result.stdout
+          wrong = subprocess.run([p], input="a different source", text=True,
+              capture_output=True, env={**os.environ, "OGMA_TRANSLATION_CASE": "faithful"})
+          assert wrong.returncode != 0
+          print("2 translator controls and 1 negative source guard PASS")
+          PY
+
+      - name: Configure native Haskell toolchain
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.2.8'
+          cabal-version: '3.14'
+
+      - name: Install Ogma build prerequisites
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libbz2-dev libexpat1-dev z3 alex happy binutils binutils-gold
+          cabal update
+
+      - name: Build exact source Ogma CLI
+        working-directory: ogma-source
+        run: cabal build ogma-cli:exe:ogma --jobs=2
+
+      - name: Translate identical English source with faithful and strict comparators
+        shell: bash
+        working-directory: ogma-source
+        run: |
+          set -euo pipefail
+          source='The temperature shall always be lower than or equal to 180 degrees'
+          translator="$(realpath ../research-fork/research/ogma-semantic/translate.py)"
+          for variant in faithful strict; do
+            mkdir -p "../evidence/$variant"
+            set +e
+            OGMA_TRANSLATION_CASE="$variant" cabal run ogma-cli:exe:ogma -- standalone \
+              --condition-expr "$source" \
+              --prop-format literal \
+              --parse-prop-via "$translator" \
+              --target-dir "../evidence/$variant/generated" \
+              > "../evidence/$variant/ogma.log" 2>&1
+            code=$?
+            set -e
+            echo "$code" > "../evidence/$variant/exit-code.txt"
+            tail -n 25 "../evidence/$variant/ogma.log"
+            test "$code" -eq 0
+            test -f "../evidence/$variant/generated/Copilot.hs"
+          done
+
+      - name: Compare emitted source and retain provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import difflib
+          a = Path("evidence/faithful/generated/Copilot.hs").read_text()
+          b = Path("evidence/strict/generated/Copilot.hs").read_text()
+          diff = ''.join(difflib.unified_diff(a.splitlines(True), b.splitlines(True),
+              fromfile="faithful/Copilot.hs", tofile="strict/Copilot.hs"))
+          Path("evidence/copilot-diff.patch").write_text(diff)
+          print(diff[:10000])
+          assert a != b, "Ogma omitted the translated formula difference"
+          assert "temperature <= 180" in a, "faithful comparator absent"
+          assert "temperature < 180" in b, "strict comparator absent"
+          print("Native generated-formula differentiation PASS")
+          PY
+          sha256sum evidence/faithful/generated/Copilot.hs evidence/strict/generated/Copilot.hs > evidence/generated-sha256.txt
+
+      - name: Preserve generated programs, logs, and diff
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogma-semantic-native-20261117
+          path: evidence/
+          if-no-files-found: warn
