@@ -1,0 +1,75 @@
+name: Ogma Doorstop generated C replay (research-only)
+
+on:
+  push:
+    branches:
+      - research/ogma-type-boundary-20261117
+    paths:
+      - .github/workflows/ogma-doorstop-c-replay.yml
+      - research/ogma-type/monitor_replay.c
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bounded-c-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Check out pinned research harness
+        uses: actions/checkout@v4
+
+      - name: Retrieve exact native Ogma and Copilot outputs
+        uses: actions/download-artifact@v4
+        with:
+          name: ogma-doorstop-native-20261117
+          run-id: 44023167656
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: evidence
+
+      - name: Verify original generated output hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' \
+            '358d38c993350d81ba41cd1cf7672bd03e571b332cb136def25a0fb4f6a67b95' 'evidence/official/generated/monitor.c' \
+            'b20492865544129770e7d34584223fa57cdc9ad05027a1c23563edb8310a8555' 'evidence/int16/generated/monitor.c' \
+            '26b79438972b15f78dd37fb6de66324354fa438ec6df541b720c0b2a031995b3' 'evidence/official/generated/Copilot.hs' \
+            '8ce680dab176c231d4dd817f9141023041333f29f76f938b2f617589aff30d40' 'evidence/int16/generated/Copilot.hs' |
+            sha256sum --check
+
+      - name: Compile and replay unchanged official Int8 monitor
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p replay
+          gcc -std=c99 -Wall -Wextra -Werror -pedantic \
+            -I evidence/official/generated \
+            research/ogma-type/monitor_replay.c \
+            evidence/official/generated/monitor.c \
+            -o replay/official
+          replay/official | tee replay/official.log
+
+      - name: Compile and replay Int16 control
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcc -std=c99 -Wall -Wextra -Werror -pedantic -DUSE_INT16 \
+            -I evidence/int16/generated \
+            research/ogma-type/monitor_replay.c \
+            evidence/int16/generated/monitor.c \
+            -o replay/int16
+          replay/int16 | tee replay/int16.log
+
+      - name: Preserve bounded C replay evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogma-doorstop-c-replay-20261117
+          path: |
+            replay/*.log
+            evidence/official/generated/monitor.c
+            evidence/int16/generated/monitor.c
+          if-no-files-found: warn
