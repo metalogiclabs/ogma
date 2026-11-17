@@ -1,0 +1,186 @@
+name: Ogma Doorstop Int8 semantics (research-only)
+
+on:
+  push:
+    branches:
+      - research/ogma-type-boundary-20261117
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ghc-numeric-model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out isolated research harness
+        uses: actions/checkout@v4
+        with:
+          path: research-fork
+
+      - name: Check out exact NASA Ogma source
+        uses: actions/checkout@v4
+        with:
+          repository: nasa/ogma
+          ref: 1f8355712aba76b4047ccb4b1f4cead1b6cdb42a
+          path: ogma-source
+
+      - name: Check out exact Copilot 4.7.1 source
+        uses: actions/checkout@v4
+        with:
+          repository: Copilot-Language/copilot
+          ref: 09fb2db9a0e50e1faef80fef86ec8e9cfce858ea
+          path: copilot-source
+
+      - name: Verify source/type and semantics anchors
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C ogma-source rev-parse HEAD)" = 1f8355712aba76b4047ccb4b1f4cead1b6cdb42a
+          test "$(git -C copilot-source rev-parse HEAD)" = 09fb2db9a0e50e1faef80fef86ec8e9cfce858ea
+          test "$(git -C ogma-source hash-object ogma-cli/examples/doorstop/REQ001.yml)" = 3d2622a8967bd264b9a878cbf208c63a000fb4be
+          grep -F 'temperature <= 180' ogma-source/ogma-cli/examples/doorstop/REQ001.yml
+          grep -F 'temperature >= 120' ogma-source/ogma-cli/examples/doorstop/REQ002.yml
+          grep -F 'temperature :: Stream Int8' ogma-source/ogma-cli/examples/doorstop/extra-vars-yaml.json
+          grep -F 'fromInteger             = Const . fromInteger' copilot-source/copilot-language/src/Copilot/Language/Stream.hs
+
+      - name: Configure GHC 9.2.8
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.2.8'
+          cabal-version: '3.14'
+          cabal-update: false
+
+      - name: Evaluate finite native GHC Int8 and Int16 controls
+        shell: bash
+        run: |
+          mkdir -p evidence
+          runghc research-fork/research/ogma-type/bounds.hs 2>&1 | tee evidence/ghc-numeric-model.log
+
+      - name: Preserve bounded GHC numeric evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogma-doorstop-ghc-boundary-20261117
+          path: evidence/
+          if-no-files-found: warn
+
+  native-ogma-copilot:
+    needs: ghc-numeric-model
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out isolated research harness
+        uses: actions/checkout@v4
+        with:
+          path: research-fork
+
+      - name: Check out exact NASA Ogma source
+        uses: actions/checkout@v4
+        with:
+          repository: nasa/ogma
+          ref: 1f8355712aba76b4047ccb4b1f4cead1b6cdb42a
+          path: ogma-source
+
+      - name: Verify native source anchors
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C ogma-source rev-parse HEAD)" = 1f8355712aba76b4047ccb4b1f4cead1b6cdb42a
+          test "$(git -C ogma-source hash-object ogma-cli/examples/doorstop/REQ001.yml)" = 3d2622a8967bd264b9a878cbf208c63a000fb4be
+
+      - name: Configure supported GHC and Cabal
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.2.8'
+          cabal-version: '3.14'
+
+      - name: Install Ogma and Copilot build prerequisites
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libbz2-dev libexpat1-dev z3 alex happy pkg-config zlib1g-dev binutils binutils-gold
+          cabal update
+
+      - name: Build exact source Ogma CLI
+        working-directory: ogma-source
+        run: cabal build ogma-cli:exe:ogma --jobs=2
+
+      - name: Generate official Doorstop and one-type positive control
+        shell: bash
+        working-directory: ogma-source
+        run: |
+          set -euo pipefail
+          mkdir -p ../evidence/official ../evidence/int16
+          sed 's/Stream Int8/Stream Int16/' ogma-cli/examples/doorstop/extra-vars-yaml.json > ../evidence/int16/extra-vars.json
+          for variant in official int16; do
+            if [[ "$variant" == official ]]; then
+              vars=ogma-cli/examples/doorstop/extra-vars-yaml.json
+            else
+              vars=../evidence/int16/extra-vars.json
+            fi
+            set +e
+            cabal run ogma-cli:exe:ogma -- standalone \
+              --input-format ogma-cli/examples/doorstop/doorstop-with-formula.cfg \
+              --prop-format literal \
+              --input-file ogma-cli/examples/doorstop/REQ001.yml \
+              --input-file ogma-cli/examples/doorstop/REQ002.yml \
+              --template-vars "$vars" \
+              --target-dir "../evidence/$variant/generated" \
+              > "../evidence/$variant/ogma.log" 2>&1
+            code=$?
+            set -e
+            echo "$code" > "../evidence/$variant/ogma-exit.txt"
+            tail -n 35 "../evidence/$variant/ogma.log"
+            test "$code" -eq 0
+            test -f "../evidence/$variant/generated/Copilot.hs"
+          done
+          grep -F 'temperature :: Stream Int8' ../evidence/official/generated/Copilot.hs
+          grep -F 'temperature :: Stream Int16' ../evidence/int16/generated/Copilot.hs
+
+      - name: Install source-compatible Copilot 4.7.1 libraries
+        shell: bash
+        run: |
+          cabal v2-install --lib --jobs=2 --disable-optimization \
+            copilot-4.7.1 copilot-c99-4.7.1 \
+            copilot-language-4.7.1 copilot-libraries-4.7.1
+
+      - name: Typecheck both complete generated programs
+        shell: bash
+        run: |
+          set +e
+          for variant in official int16; do
+            ghc -fforce-recomp -fno-code "evidence/$variant/generated/Copilot.hs" \
+              > "evidence/$variant/ghc.log" 2>&1
+            code=$?
+            echo "$code" > "evidence/$variant/ghc-exit.txt"
+            echo "$variant GHC exit $code"
+            sed -n '1,70p' "evidence/$variant/ghc.log"
+          done
+          set -e
+          test "$(cat evidence/official/ghc-exit.txt)" -eq 0
+          test "$(cat evidence/int16/ghc-exit.txt)" -eq 0
+
+      - name: Generate native Copilot C sources for inspection
+        shell: bash
+        run: |
+          for variant in official int16; do
+            (
+              cd "evidence/$variant/generated"
+              set +e
+              runghc Copilot.hs > ../copilot-cgen.log 2>&1
+              code=$?
+              echo "$code" > ../copilot-cgen-exit.txt
+              find . -maxdepth 3 -type f -name '*.c' -print
+              sed -n '1,100p' ../copilot-cgen.log
+            )
+          done
+
+      - name: Preserve native generated source and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogma-doorstop-native-20261117
+          path: evidence/
+          if-no-files-found: warn
