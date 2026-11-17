@@ -7,6 +7,7 @@ from r2u2_native_replay import (
     expected_and_observed,
     make_corrected,
     make_trace,
+    native_spec11_at_time1,
     source_bindings,
 )
 
@@ -49,8 +50,8 @@ class CySatBoundaryTests(unittest.TestCase):
         trace = make_trace(header, first_data, (22, 22, 22, 22), (22, 25, 22, 22))
         self.assertEqual(trace.splitlines(), [
             header.strip(),
-            "99,22,22,22,22",
-            "99,22,25,22,22",
+            "99,22.0,22.0,22.0,22.0",
+            "99,22.0,25.0,22.0,22.0",
         ])
 
     def test_float_signal_compilation_requires_c2po_booleanizer(self):
@@ -58,6 +59,14 @@ class CySatBoundaryTests(unittest.TestCase):
         self.assertEqual(command[0:2], ["python3", "r2u2/compiler/c2po.py"])
         self.assertIn("--booleanizer", command)
         self.assertEqual(command[-6:], ["--spec", "official.c2po", "--trace", "eps.csv", "--output", "official.bin"])
+
+    def test_native_spec11_must_have_unambiguous_time_one_verdict(self):
+        self.assertFalse(native_spec11_at_time1("10:0,T\n10:1,F\n"))
+        self.assertTrue(native_spec11_at_time1("10:1,T\n10:0,F\n"))
+        with self.assertRaisesRegex(ValueError, "one SPEC11"):
+            native_spec11_at_time1("10:0,T\n")
+        with self.assertRaisesRegex(ValueError, "one SPEC11"):
+            native_spec11_at_time1("10:1,T\n10:1,F\n")
 
 
 if __name__ == "__main__":

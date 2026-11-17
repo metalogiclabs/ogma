@@ -75,7 +75,9 @@ def make_trace(
     def row(temperatures: tuple[int, ...]) -> str:
         values = first_values.copy()
         for name, value in zip(CELL_NAMES, temperatures):
-            values[names.index(name)] = str(value)
+            # R2U2's C CSV loader uses the presence of '.' to select float
+            # parsing.  An integer-looking token writes the wrong union arm.
+            values[names.index(name)] = f"{value:.1f}"
         return ",".join(values)
 
     return "\n".join([header.strip(), row(previous), row(current), ""])
@@ -101,6 +103,15 @@ def compiler_command(repo: Path | str, spec: Path | str, trace: Path | str, outp
         "python3", str(Path(repo) / "compiler/c2po.py"), "--booleanizer",
         "--spec", str(spec), "--trace", str(trace), "--output", str(output),
     ]
+
+
+def native_spec11_at_time1(stdout: str) -> bool:
+    # The pinned full EPS FTSPEC lists SPEC11 as zero-based formula 10.
+    # R2U2 outputs `formula_id:timestamp,T|F`, possibly aggregating time ranges.
+    matches = re.findall(r"^10:1,([TF])$", stdout, flags=re.MULTILINE)
+    if len(matches) != 1:
+        raise ValueError(f"Expected exactly one SPEC11 verdict at time 1, got {matches!r}")
+    return matches[0] == "T"
 
 
 def main() -> None:
@@ -138,7 +149,7 @@ def main() -> None:
         "benchmark_sha256": _sha256(benchmark),
         "original_dependency_fingerprint": source_bindings(source),
         "corrected_dependency_fingerprint": source_bindings(repaired),
-        "native_verdict_interpretation": "Pending review of actual R2U2 output format",
+        "native_verdict_interpretation": "SPEC11 is zero-based formula 10; asserted t=1 T/F against source comparator",
         "cases": {},
     }
     for key, spec in {"official": source, "cell_local_control": repaired}.items():
@@ -169,6 +180,14 @@ def main() -> None:
                 str(output / f"{variant}.bin"), str(trace_path),
             ], output / f"run_{name}_{variant}", cwd=repo)
             record[f"{variant}_native_stdout"] = native.stdout.strip()
+            verdict = native_spec11_at_time1(native.stdout)
+            record[f"{variant}_native_SPEC11_time1"] = verdict
+            source_truth = official_source if variant == "official" else controlled_source
+            if verdict != source_truth:
+                raise AssertionError(
+                    f"Native SPEC11 diverges from source comparator: "
+                    f"{name} {variant} native={verdict} source={source_truth}"
+                )
         manifest["cases"][name] = record
 
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
