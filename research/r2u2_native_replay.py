@@ -94,6 +94,15 @@ def _run(argv: list[str], destination: Path, cwd: Path) -> subprocess.CompletedP
     return result
 
 
+def compiler_command(repo: Path | str, spec: Path | str, trace: Path | str, output: Path | str) -> list[str]:
+    # The CySat EPS benchmark declares float channels.  C2PO's booleanizer is
+    # opt-in; without it the original upstream source fails type checking.
+    return [
+        "python3", str(Path(repo) / "compiler/c2po.py"), "--booleanizer",
+        "--spec", str(spec), "--trace", str(trace), "--output", str(output),
+    ]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", type=Path, required=True)
@@ -136,10 +145,7 @@ def main() -> None:
         spec_path = output / f"{key}.c2po"
         spec_path.write_text(spec)
         binary = output / f"{key}.bin"
-        _run([
-            "python3", str(repo / "compiler/c2po.py"), "--spec", str(spec_path),
-            "--trace", str(csv), "--output", str(binary),
-        ], output / f"compile_{key}", cwd=repo)
+        _run(compiler_command(repo, spec_path, csv, binary), output / f"compile_{key}", cwd=repo)
         manifest[f"{key}_source_sha256"] = _sha256(spec_path)
         manifest[f"{key}_binary_sha256"] = _sha256(binary)
 

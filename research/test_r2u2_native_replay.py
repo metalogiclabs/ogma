@@ -3,6 +3,7 @@
 import unittest
 
 from r2u2_native_replay import (
+    compiler_command,
     expected_and_observed,
     make_corrected,
     make_trace,
@@ -51,6 +52,12 @@ class CySatBoundaryTests(unittest.TestCase):
             "99,22,22,22,22",
             "99,22,25,22,22",
         ])
+
+    def test_float_signal_compilation_requires_c2po_booleanizer(self):
+        command = compiler_command("r2u2", "official.c2po", "eps.csv", "official.bin")
+        self.assertEqual(command[0:2], ["python3", "r2u2/compiler/c2po.py"])
+        self.assertIn("--booleanizer", command)
+        self.assertEqual(command[-6:], ["--spec", "official.c2po", "--trace", "eps.csv", "--output", "official.bin"])
 
 
 if __name__ == "__main__":
