@@ -1,0 +1,151 @@
+name: Research - Ogma numeric boundary source-to-C99 regression
+
+on:
+  push:
+    branches:
+      - research/lustre-greater-boundary-20261119
+    paths:
+      - .github/workflows/research-lustre-boundary-native.yml
+      - ogma-core/src/Language/Trans/Lustre2Copilot.hs
+      - ogma-core/tests/Main.hs
+      - ogma-core/ogma-core.cabal
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lustre_numeric_boundary_repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out proposed Ogma repair on Metalogic fork
+        uses: actions/checkout@v4
+        with:
+          path: ogma-source
+          persist-credentials: false
+
+      - name: Check out source-locked independent FRET replay harness
+        uses: actions/checkout@v4
+        with:
+          repository: metalogiclabs/fret
+          ref: 6ca1c5035da775e5f3096a09274b561d11d30fe6
+          path: lab
+          persist-credentials: false
+
+      - name: Check out pinned NASA FRET source
+        uses: actions/checkout@v4
+        with:
+          repository: NASA-SW-VnV/fret
+          ref: cf0f913cc15c41705e803593297e89cd6056b839
+          path: fret
+          persist-credentials: false
+
+      - name: Configure Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify only intended operator mapping and derive same KIAS input
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s lab/research -p test_fret_ogma_postcensus.py -v
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          source = Path("ogma-source/ogma-core/src/Language/Trans/Lustre2Copilot.hs").read_text()
+          mapping = dict(re.findall(
+              r'^opTwoNum2Copilot BoolNumOp2(\w+) = "([^"]+)"$', source, re.M
+          ))
+          assert mapping == {
+              "Eq": "==", "Ne": "/=", "Lt": "<", "Le": "<=",
+              "Gt": ">", "Ge": ">="
+          }, mapping
+          print("PASS: six numeric Lustre comparison operator mappings preserved")
+          PY
+          node lab/research/run_fret_export_method.cjs --fret fret --out evidence/ogma-repair/method
+          python3 lab/research/fret_ogma_postcensus.py \
+            --input evidence/ogma-repair/method/method-full-project.json \
+            --out evidence/ogma-repair/derived \
+            | tee evidence/ogma-repair/derived-stdout.json
+          sha256sum evidence/ogma-repair/method/method-full-project.json \
+            evidence/ogma-repair/derived/047-assigned-control.json \
+            | tee evidence/ogma-repair/source-sha256.log
+
+      - name: Configure GHC and Cabal
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.2.8'
+          cabal-version: '3.14'
+
+      - name: Install pinned native prerequisites
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libbz2-dev libexpat1-dev z3 alex happy pkg-config zlib1g-dev binutils binutils-gold
+          cabal update
+
+      - name: Build and run Ogma numeric comparison Haskell regression
+        working-directory: ogma-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cabal test ogma-core:unit-tests --jobs=2 --test-show-details=always \
+            2>&1 | tee ../evidence/ogma-repair/ogma-core-tests.log
+          cabal build ogma-cli:exe:ogma --jobs=2 \
+            2>&1 | tee ../evidence/ogma-repair/ogma-cli-build.log
+
+      - name: Translate unchanged KIAS requirement using only patched comparator
+        working-directory: ogma-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../evidence/ogma-repair/native
+          cabal run ogma-cli:exe:ogma -- standalone \
+            --input-format ogma-core/data/formats/fcs_lustre \
+            --prop-format lustre \
+            --input-file ../evidence/ogma-repair/derived/047-assigned-control.json \
+            --target-dir ../evidence/ogma-repair/native \
+            2>&1 | tee ../evidence/ogma-repair/ogma-translate.log
+          test -f ../evidence/ogma-repair/native/Copilot.hs
+          grep -F 'kias >= 0.0' ../evidence/ogma-repair/native/Copilot.hs
+
+      - name: Compile patched generated monitor via Copilot C99
+        shell: bash
+        run: |
+          set -euo pipefail
+          cabal v2-install --lib --jobs=2 --disable-optimization \
+            copilot-4.7.1 copilot-c99-4.7.1 copilot-language-4.7.1 copilot-libraries-4.7.1
+          ghc -fforce-recomp -fno-code evidence/ogma-repair/native/Copilot.hs \
+            2>&1 | tee evidence/ogma-repair/ghc.log
+          (
+            cd evidence/ogma-repair/native
+            runghc Copilot.hs 2>&1 | tee copilot-cgen.log
+          )
+          test -f evidence/ogma-repair/native/monitor.c
+          test -f evidence/ogma-repair/native/monitor.h
+
+      - name: Independent native C99 boundary regression on same four traces
+        shell: bash
+        run: |
+          set -euo pipefail
+          generated=evidence/ogma-repair/native
+          gcc -std=c99 -Wall -Wextra -Werror -pedantic \
+            -I "$generated" lab/research/fret_kias_copilot_replay.c \
+            "$generated/monitor.c" -o "$generated/native-replay"
+          for case in 0 1 2 3; do
+            "$generated/native-replay" "$case" | tee "$generated/native-case-$case.log"
+            grep -q 'observed-source-difference=NO' "$generated/native-case-$case.log"
+          done
+          printf 'PASS: patched translator preserves source at exact zero boundary\n' \
+            | tee evidence/ogma-repair/witness-classification.log
+
+      - name: Preserve Haskell tests and patched native C99 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogma-greater-boundary-fixed-20261119
+          path: evidence/ogma-repair/
+          if-no-files-found: warn
+          retention-days: 30
