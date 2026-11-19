@@ -2,6 +2,7 @@
 
 ## [1.X.Y] - 2026-09-26
 
+* Preserve strict and inclusive greater-than comparisons in Lustre-to-Copilot translation (#630).
 * Bump upper version constraint on `aeson`, `QuickCheck` (#609).
 * Remove duplicate line from copyright header (#611).
 * Remove extraneous horizontal space from imports (#620).
