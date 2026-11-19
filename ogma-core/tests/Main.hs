@@ -5,13 +5,15 @@ module Main where
 import Data.Monoid                    ( mempty )
 import Test.Framework                 ( Test, defaultMainWithOpts )
 import Test.Framework.Providers.HUnit ( testCase )
-import Test.HUnit                     ( assertBool )
+import Test.HUnit                     ( assertBool, assertEqual )
 import System.Directory               ( getTemporaryDirectory )
 
 -- Internal imports
 import Command.CStructs2Copilot (cstructs2Copilot)
 import Command.Result           (isSuccess)
 import Command.Standalone       (CommandOptions (..), command)
+import Language.Lustre.AbsLustre (BoolNumOp (..), BoolSpec (..), Op2In (..))
+import Language.Trans.Lustre2Copilot (boolSpec2Copilot)
 
 -- | Run all unit tests on ogma-core.
 main :: IO ()
@@ -20,8 +22,10 @@ main = defaultMainWithOpts tests mempty
 -- | All unit tests for ogma-core.
 tests :: [Test.Framework.Test]
 tests =
-  [
-    testCase "standalone-cmd-fcs-ok"
+  [ testCase "lustre-number-relations-preserve-comparison-operators"
+      testLustreNumericComparisons
+
+  , testCase "standalone-cmd-fcs-ok"
       (testStandaloneFCS "tests/fcs_good.json" True)
     -- Should pass
 
@@ -62,6 +66,27 @@ tests =
       (testCStructs2Copilot "tests/reduced_geofence_msgs_bad.h" False)
     -- Should fail because a keyword is incorrect
   ]
+
+-- | Comparison operators must be preserved when Lustre predicates are
+-- translated to Copilot: strict vs inclusive boundaries are observable.
+-- Equal operands expose the difference between strict and inclusive
+-- comparisons in subsequent runtime replays.
+testLustreNumericComparisons :: IO ()
+testLustreNumericComparisons = mapM_ check
+  [ (BoolNumOp2Eq, "==")
+  , (BoolNumOp2Ne, "/=")
+  , (BoolNumOp2Lt, "<")
+  , (BoolNumOp2Le, "<=")
+  , (BoolNumOp2Gt, ">")
+  , (BoolNumOp2Ge, ">=")
+  ]
+  where
+    check (operator, symbol) =
+      let actual = boolSpec2Copilot
+                     (BoolSpecOp2In (BoolSpecConstI 1)
+                       (Op2NumCmp operator) (BoolSpecConstI 1))
+      in assertEqual ("Lustre " ++ symbol ++ " maps to the same Copilot relation")
+           ("(1 " ++ symbol ++ " 1)") actual
 
 -- | Test C struct parser and conversion to Copilot structs
 -- for a particular file.

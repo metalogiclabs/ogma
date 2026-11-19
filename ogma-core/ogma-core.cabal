@@ -207,6 +207,7 @@ test-suite unit-tests
     , test-framework-quickcheck2 >= 0.3.0.4  && < 0.4
 
     , ogma-core
+    , ogma-language-lustre
 
   hs-source-dirs:
     tests
